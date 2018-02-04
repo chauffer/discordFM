@@ -1,92 +1,93 @@
 import asyncio
-import configparser
 import os
 import signal
 import sys
 
 import discord
 import pylast
-from discord import Client, Status
+from discord import Status
 from pylast import Track
 
+token = os.environ['DISCORDFM_TOKEN']
+config = {
+    'lastfm_api': os.environ['DISCORDFM_LASTFM_API'],
+    'lastfm_user': os.environ['DISCORDFM_LASTFM_USER'],
+    'status': os.getenv('DISCORDFM_STATUS', 'online'),
+    'format': os.getenv('DISCORDFM_FORMAT', '{song} by {artist}'),
+}
 
-class DiscordFM(Client):
-    _current_track = ""
+
+class DiscordFM(discord.Client):
+    _current_track = ''
 
     def __init__(self, conf, **options):
         super().__init__(**options)
 
-        self.config = conf
+        self.conf = conf
         self.status = Status.online
 
         if not sys.platform.startswith('win'):  # pragma: no cover
-            self.loop.add_signal_handler(getattr(signal, "SIGTERM"), self.exit)
+            self.loop.add_signal_handler(
+                getattr(signal, 'SIGTERM'),
+                self.exit,
+            )
 
     async def on_ready(self):
-        print("-" * 48)
-        print("Logged in as")
+        print('-' * 48)
+        print('Logged in as')
         print(self.user.name)
         print(self.user.id)
-        print("-" * 48)
+        print('-' * 48)
 
-        lastfm_user = self.get_lasfm_user()
-
-        str_status = self.config.get("Options", "status", fallback="online")
-        self.status = Status[str_status]
+        self.status = Status[self.conf['status']]
 
         while True:
             try:
-                current_track = lastfm_user.get_now_playing()
-                await self.set_now_playing(current_track, self.status)
+                await self.set_now_playing(self.get_np(), self.status)
                 await asyncio.sleep(5)
             except pylast.WSError as e:
-                print("Error: " + e.details)
+                print('Error: ' + e.details)
                 self.exit()
 
     async def set_now_playing(self, track: Track, status: Status):
         if track is None:
-            await self.now_playing("DiscordFM", status)
+            if self._current_track is not None:
+                self._current_track = None
+                await self.now_playing(None, status)
             return
 
-        str_format = self.config.get("Options", "format", fallback="{artist} - {song}")
-
-        new_track = str_format.format(artist=track.get_artist().get_name(),
-                                      song=track.get_name())
+        new_track = self.conf['format'].format(
+            artist=track.get_artist().get_name(),
+            song=track.get_name(),
+        )
 
         if new_track != self._current_track:
             self._current_track = new_track
-            print("Now playing: {}".format(self._current_track))
+            print(f'Now playing: {self._current_track}')
             await self.now_playing(self._current_track, status)
 
-    async def now_playing(self, song: str = None, status: Status = Status.online):
+    async def now_playing(self,
+        song: str = None, status: Status = Status.online):
+
         if song is None:
             await self.change_presence(game=None)
             return
 
-        await self.change_presence(game=discord.Game(name=song), status=status)
+        await self.change_presence(
+            game=discord.Game(name=song),
+            status=status,
+        )
 
     async def close(self):
-        print("Closing...")
+        print('Closing...')
         await self.now_playing(None, status=self.status)
         await super().close()
 
-    def get_lasfm_user(self):
-        apikey = self.config.get("LastFM", "apikey", fallback=None)
-        user = self.config.get("LastFM", "user", fallback=None)
+    def get_np(self):
 
-        if not apikey:
-            print("Error: No LastFM API Key specified")
-            return
-
-        if not user:
-            print("Error: No LastFM user specified")
-            return
-
-        lastfm = pylast.LastFMNetwork(
-            api_key=apikey
-        )
-
-        return lastfm.get_user(user)
+        return pylast.LastFMNetwork(
+            api_key=config['lastfm_api']
+        ).get_user(config['lastfm_user']).get_now_playing()
 
     @staticmethod
     def exit():
@@ -94,24 +95,5 @@ class DiscordFM(Client):
         raise KeyboardInterrupt
 
 
-if __name__ == "__main__":
-    config = configparser.RawConfigParser()
-    config_file = os.path.dirname(os.path.realpath(__file__)) + "/config.ini"
-    config.read(config_file)
-
-    if not config.has_section("Discord") or not config.has_section("LastFM"):
-        print("Error: Config file is invalid.")
-        quit()
-
-    token = config.get("Discord", "token", fallback=None)
-
-    if not token or "XXXXX" in token:
-        username = config.get("Discord", "user", fallback=None)
-        password = config.get("Discord", "pass", fallback=None)
-        if not username or not password:
-            print("Error: You need to specify a token, or username and password")
-            quit()
-
-        DiscordFM(config).run(username, password)
-    else:
+if __name__ == '__main__':
         DiscordFM(config).run(token, bot=False)
